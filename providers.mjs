@@ -107,6 +107,19 @@ function joinUrl(baseUrl, path) {
   return `${prefix}${suffix}`;
 }
 
+// Some providers scope their endpoint to the account rather than to the key:
+// Cloudflare Workers AI serves chat under /accounts/<account_id>/ai/v1, so the
+// account id is part of the URL and cannot be a header. Letting a base URL
+// reference the environment keeps that out of the committed config. An unset
+// name expands to empty rather than throwing, so an unconfigured provider just
+// fails its first request instead of blocking startup.
+function expandEnvVars(value) {
+  return String(value || '').replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+    (match, name) => process.env[name] || '',
+  );
+}
+
 export function createProviderRegistry(config, { host, port }) {
   const entries = Object.entries(config.providers || {});
   if (!entries.length) throw new Error('config.providers is empty');
@@ -125,7 +138,10 @@ export function createProviderRegistry(config, { host, port }) {
     // for the rest `freeModels` stays the allowlist and the catalog is used
     // solely to notice models that disappeared upstream.
     const catalogHasPricing = usesCatalog && cfg.pricing !== false;
-    const baseUrl = String(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(/\/+$/, '');
+    const baseUrl = expandEnvVars(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(
+      /\/+$/,
+      '',
+    );
     if (!baseUrl) throw new Error(`provider ${name} is missing baseUrl`);
     providers.set(name, {
       name,
@@ -144,7 +160,7 @@ export function createProviderRegistry(config, { host, port }) {
       modelsPath: cfg.modelsPath || '/models',
       // Some providers serve a richer catalog outside the OpenAI-compatible
       // prefix used for chat, on its own auth scheme.
-      modelsUrl: String(cfg.modelsUrl || ''),
+      modelsUrl: expandEnvVars(cfg.modelsUrl || ''),
       modelsKeyHeader: String(cfg.modelsKeyHeader || ''),
       extraHeaders: cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : {},
       baseUrl,
@@ -321,6 +337,10 @@ export function createProviderRegistry(config, { host, port }) {
 
   async function refreshProviderCatalog(provider, force, catalogRefreshMs) {
     if (!provider.usesCatalog) return;
+    // A keyless provider cannot authenticate a catalog request. Skipping it
+    // keeps the refresh interval from spending one round trip per provider the
+    // operator never configured, which matters once the config lists many.
+    if (!provider.apiKey) return;
     if (
       !force &&
       Date.now() - provider.catalogAttemptedAt < catalogRefreshMs &&

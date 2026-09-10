@@ -62,7 +62,10 @@ installUpstreamProxy(
   { socksFirstHosts: config.socksFirstHosts || [] },
 );
 const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
-const PORT = Number(process.env.FREE_ROUTER_PORT || config.port || 8787);
+// Container platforms assign the port and inject it as PORT. SnapDeploy sets
+// and locks it, so honouring PORT is what makes a zero-config image reachable;
+// FREE_ROUTER_PORT stays the explicit override for anyone who wants one.
+const PORT = Number(process.env.FREE_ROUTER_PORT || process.env.PORT || config.port || 8787);
 const ATTEMPT_TIMEOUT_MS = Number(
   process.env.FREE_ROUTER_ATTEMPT_TIMEOUT_MS || config.attemptTimeoutMs || 180000,
 );
