@@ -135,13 +135,20 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
 
 // --- What a deploy platform detects, and config integrity -------------------
 // SnapDeploy scans the repo and lists the variables it finds in `Dockerfile`,
-// `.env.example`, and framework config. A scanner reads `NAME=value` pairs, so
-// a commented-out name is invisible and the key never reaches the container.
+// `.env.example`, and framework config. A scanner reads `NAME=value` pairs, and
+// every name it finds is tagged Required on the "Environment Variables
+// Detected" screen — so a real line is a field you have to fill before the
+// Deploy button works. Only variables the deployment genuinely cannot run
+// without may be written as real lines; everything optional stays commented,
+// which keeps it documented for anyone adding a key later without blocking a
+// first deploy. A value a platform was not told about is not needed either:
+// names can be added on the deploy screen or in Container Settings.
 {
   const repoRoot = path.dirname(fileURLToPath(import.meta.url));
   const shipped = JSON.parse(fs.readFileSync(path.join(repoRoot, 'config.json'), 'utf8'));
   const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
 
+  // Real `NAME=` lines: what a scanner sees, and therefore what it requires.
   const detected = new Set(
     envExample
       .split(/\r?\n/)
@@ -149,17 +156,39 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
       .filter(Boolean)
       .map((match) => match[1]),
   );
-  // A real value committed here is a leaked secret.
-  const withValues = envExample.split(/\r?\n/).filter((line) => /^[A-Za-z_][A-Za-z0-9_]*=.+/.test(line));
-  assert.deepEqual(withValues, [], '.env.example must not carry a real value');
+  // Every name in the file, commented or not: what a reader can discover.
+  const mentioned = new Set(
+    [...envExample.matchAll(/^\s*#?\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map(
+      (match) => match[1],
+    ),
+  );
+
+  // The single exception is the caller token: unset on a host that publishes
+  // the port, /v1 spends your upstream quota for whoever asks.
+  assert.ok(detected.has('FREE_ROUTER_API_KEY'), 'FREE_ROUTER_API_KEY must be a real line so a deploy cannot skip it');
+  assert.deepEqual(
+    [...detected].filter((name) => name !== 'FREE_ROUTER_API_KEY').sort(),
+    [],
+    'optional variables must stay commented out; a real `NAME=` line is a Required field on the deploy screen',
+  );
+
+  // A real value committed here is a leaked secret. Key- and token-named lines
+  // are checked commented as well as uncommented, because a placeholder that is
+  // never injected still ends up in every reader's `.env` and in git history.
+  const leakedSecrets = envExample
+    .split(/\r?\n/)
+    .map((line) => line.match(/^\s*#?\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/))
+    .filter((match) => match && /_(?:KEY|TOKEN)$/.test(match[1]) && match[2].trim() !== '')
+    .map((match) => match[0].trim());
+  assert.deepEqual(leakedSecrets, [], '.env.example must not carry a key or token value, commented out or not');
 
   for (const [name, provider] of Object.entries(shipped.providers)) {
     const keyEnv = provider.keyEnv || `${name.replace(/-/g, '_').toUpperCase()}_API_KEY`;
-    assert.ok(detected.has(keyEnv), `${keyEnv} is not detectable in .env.example`);
+    assert.ok(mentioned.has(keyEnv), `${keyEnv} is not documented in .env.example`);
   }
   // The account id is interpolated into Cloudflare's base URL rather than sent
-  // as a header, so it has to be discoverable too.
-  assert.ok(detected.has('CLOUDFLARE_ACCOUNT_ID'), 'CLOUDFLARE_ACCOUNT_ID not in .env.example');
+  // as a header, so it has to be documented too.
+  assert.ok(mentioned.has('CLOUDFLARE_ACCOUNT_ID'), 'CLOUDFLARE_ACCOUNT_ID not in .env.example');
 
   // The provider table in the README is the only place a reader learns which
   // key to set, so it has to cover every provider in the config.

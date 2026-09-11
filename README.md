@@ -14,8 +14,8 @@ Site: [www222fff.github.io/free-router](https://www222fff.github.io/free-router/
 
 ## Run
 
-Node.js 20+. Copy `.env.example` to `.env`, add at least one provider key,
-then:
+Node.js 20+. Copy `.env.example` to `.env`, uncomment at least one provider key
+and fill it in, then:
 
 ```bash
 git clone https://github.com/www222fff/free-router.git
@@ -29,9 +29,12 @@ Stop with `./stop.sh`. Docker: `docker compose up -d`. Open
 
 ## Providers
 
-Every provider below is read from a single variable, `<NAME>_API_KEY`. A
+Every provider below is read from a single variable, `<NAME>_API_KEY`, set in
+your shell, in `.env`, or on the deploy platform — never in `config.json`. A
 missing key just drops that provider; nothing else changes. `config.json`
-carries the base URL and the free-model list for each.
+carries the base URL and the free-model list for each. Every key in the table is
+one you copy from the provider in the "Where" column. `FREE_ROUTER_API_KEY`,
+under Authentication below, is the opposite: nobody issues it, you invent it.
 
 | Variable | Where | Free access |
 | --- | --- | --- |
@@ -83,22 +86,44 @@ The Dockerfile and `.env.example` are set up for it. Push this branch, then in
 the dashboard choose **Deploy from GitHub** and pick the repo.
 
 1. SnapDeploy detects the Dockerfile and builds the image.
-2. It scans the repo and shows an **Environment Variables Detected** screen
-   listing every key above — they appear because `.env.example` declares each
-   as a real `NAME=` line rather than a comment.
-3. Fill in the keys you have, leave the rest empty, and deploy. Names ending in
-   `_KEY` or `_TOKEN` get a Secret badge and are masked.
-4. **Set `FREE_ROUTER_API_KEY`.** See below — without it the deployment is open.
+2. It scans the repo and shows an **Environment Variables Detected** screen.
+   Every variable listed there is tagged Required, so `.env.example` declares
+   exactly one as a real `NAME=` line — `FREE_ROUTER_API_KEY`, the value a
+   public deployment cannot do without. The 29 provider keys above, plus
+   Cloudflare's account id, are commented out and never appear — which is what
+   lets you deploy with no provider key at all and add them as you get them.
+3. Enter the token — `openssl rand -hex 32` is enough — and click **Deploy**.
+4. Add provider keys on the same screen with **+ Add Variable**, or afterwards
+   under **Container Settings → Environment Variables**; either way the name is
+   what matters, so copy it from the table above. SnapDeploy rolls the container
+   so a new value takes effect. Names ending in `_KEY` or `_TOKEN` get a Secret
+   badge and are masked.
 5. `PORT` is assigned and locked by SnapDeploy; `server.mjs` falls back to it,
    and the image binds `0.0.0.0` so the platform proxy can reach it.
 
-Add or rotate a key later under **Container Settings → Environment Variables**;
-SnapDeploy rolls the container so the new value takes effect.
+A key saved through the web interface is written to `.env` inside the container,
+so it survives a restart but not a rebuild. On a deployed instance, keep
+SnapDeploy's variables as the durable store and treat the dashboard as a
+temporary override.
 
 ## Authentication
 
 Set `FREE_ROUTER_API_KEY` before exposing the router to anything but loopback.
 It is a shared secret that callers send as `Authorization: Bearer <token>`.
+
+There is nowhere to get it: it is not issued by a provider, has no signup page,
+and grants nothing outside your own gateway. Make it up.
+
+```bash
+openssl rand -hex 32    # or: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Paste that value into `.env` for a local run, or into the one Required field on
+SnapDeploy's deploy screen (Container Settings → Environment Variables later,
+which rolls the container). Every client then sends the same string as its API
+key: OpenAI SDKs are pointed at `https://your-host/v1` with `api_key` set to it,
+and curl uses the header shown below. It is read once at startup, so changing it
+needs a restart. Give each client the same value, or rotate it to revoke one.
 
 Without it, `/v1/chat/completions` spends your upstream quota for anyone who
 can reach the port and `/health` publishes every base URL and free-model list.
