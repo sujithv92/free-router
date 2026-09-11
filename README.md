@@ -118,6 +118,14 @@ and grants nothing outside your own gateway. Make it up.
 openssl rand -hex 32    # or: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
+Hex is the point, not just the length. There is no format rule — the app takes
+whatever non-empty string you set — but `start.sh` loads `.env` by sourcing it in
+a shell, so a value containing spaces, `$`, backticks, or quotes is expanded or
+executed by the shell instead of read as a secret. A word you invent is also
+guessable by whoever is scanning the public port, and memorability buys you
+nothing here: the value is pasted once into the deploy screen and once into each
+client, never typed.
+
 Paste that value into `.env` for a local run, or into the one Required field on
 SnapDeploy's deploy screen (Container Settings → Environment Variables later,
 which rolls the container). Every client then sends the same string as its API
