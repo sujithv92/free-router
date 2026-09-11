@@ -107,6 +107,19 @@ function joinUrl(baseUrl, path) {
   return `${prefix}${suffix}`;
 }
 
+// Some providers scope their endpoint to the account rather than to the key:
+// Cloudflare Workers AI serves chat under /accounts/<account_id>/ai/v1, so the
+// account id is part of the URL and cannot be a header. Letting a base URL
+// reference the environment keeps that out of the committed config. An unset
+// name expands to empty rather than throwing, so an unconfigured provider just
+// fails its first request instead of blocking startup.
+function expandEnvVars(value) {
+  return String(value || '').replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+    (match, name) => process.env[name] || '',
+  );
+}
+
 export function createProviderRegistry(config, { host, port }) {
   const entries = Object.entries(config.providers || {});
   if (!entries.length) throw new Error('config.providers is empty');
@@ -125,7 +138,10 @@ export function createProviderRegistry(config, { host, port }) {
     // for the rest `freeModels` stays the allowlist and the catalog is used
     // solely to notice models that disappeared upstream.
     const catalogHasPricing = usesCatalog && cfg.pricing !== false;
-    const baseUrl = String(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(/\/+$/, '');
+    const baseUrl = expandEnvVars(process.env[baseUrlEnv] || cfg.baseUrl || '').replace(
+      /\/+$/,
+      '',
+    );
     if (!baseUrl) throw new Error(`provider ${name} is missing baseUrl`);
     providers.set(name, {
       name,
@@ -144,7 +160,7 @@ export function createProviderRegistry(config, { host, port }) {
       modelsPath: cfg.modelsPath || '/models',
       // Some providers serve a richer catalog outside the OpenAI-compatible
       // prefix used for chat, on its own auth scheme.
-      modelsUrl: String(cfg.modelsUrl || ''),
+      modelsUrl: expandEnvVars(cfg.modelsUrl || ''),
       modelsKeyHeader: String(cfg.modelsKeyHeader || ''),
       extraHeaders: cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : {},
       baseUrl,
@@ -321,6 +337,10 @@ export function createProviderRegistry(config, { host, port }) {
 
   async function refreshProviderCatalog(provider, force, catalogRefreshMs) {
     if (!provider.usesCatalog) return;
+    // A keyless provider cannot authenticate a catalog request. Skipping it
+    // keeps the refresh interval from spending one round trip per provider the
+    // operator never configured, which matters once the config lists many.
+    if (!provider.apiKey) return;
     if (
       !force &&
       Date.now() - provider.catalogAttemptedAt < catalogRefreshMs &&
@@ -361,26 +381,35 @@ export function createProviderRegistry(config, { host, port }) {
     }
   }
 
-  async function refreshCatalogs(force, catalogRefreshMs, log) {
-    for (const provider of providers.values()) {
-      if (!provider.usesCatalog) continue;
-      try {
-        const result = await refreshProviderCatalog(provider, force, catalogRefreshMs);
-        if (result) {
-          const detail =
-            result.freeCount === null
-              ? `${result.chatCount} chat-capable, no prices published`
-              : `${result.freeCount} zero-cost`;
-          log(`catalog refreshed (${result.name}): ${result.size} models, ${detail}`);
+  // Refreshing one provider at a time made the first request after startup
+  // wait for every catalog in turn: 25 providers at 700ms each measured 17.6s,
+  // and handleChat awaits this. Bounded rather than unbounded so a cold start
+  // does not fire every listing at once and trip provider rate limits.
+  async function refreshCatalogs(force, catalogRefreshMs, log, concurrency = 6) {
+    const queue = [...providers.values()].filter((provider) => provider.usesCatalog);
+    const worker = async () => {
+      // shift() is synchronous, so workers cannot take the same provider.
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        try {
+          const result = await refreshProviderCatalog(next, force, catalogRefreshMs);
+          if (result) {
+            const detail =
+              result.freeCount === null
+                ? `${result.chatCount} chat-capable, no prices published`
+                : `${result.freeCount} zero-cost`;
+            log(`catalog refreshed (${result.name}): ${result.size} models, ${detail}`);
+          }
+        } catch (error) {
+          log(
+            `catalog refresh failed for ${next.name}; retaining previous catalog: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
-      } catch (error) {
-        log(
-          `catalog refresh failed for ${provider.name}; retaining previous catalog: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
       }
-    }
+    };
+    const workers = Math.min(concurrency, queue.length);
+    await Promise.all(Array.from({ length: workers }, worker));
   }
 
   function listListedModels() {

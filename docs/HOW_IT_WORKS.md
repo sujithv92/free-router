@@ -18,15 +18,15 @@ file, uncomment the keys you have, and fill them in:
 cp .env.example .env
 ```
 
-| Variable | Required | Where to get it |
-| --- | --- | --- |
-| `OPENROUTER_API_KEY` | Yes, for OpenRouter fallbacks and model discovery | [openrouter.ai/keys](https://openrouter.ai/keys) |
-| `TOKENROUTER_API_KEY` | No | Your TokenRouter account |
-| `BAI_API_KEY` | No | [chat.b.ai](https://chat.b.ai) API keys. One key covers all official B.AI models |
-| `GEMINI_API_KEY` | No | [Google AI Studio](https://aistudio.google.com/apikey). Free-tier Flash-Lite is quota-limited, not unlimited |
+`OPENROUTER_API_KEY` is the one variable worth having: it drives OpenRouter
+fallbacks and the weekly discovery run. Everything else is optional. The full
+list of 29 supported providers, with signup links and free-tier limits, is in
+the [README](../README.md#providers).
 
 Any later provider named `foo` reads `FOO_API_KEY` and `FOO_BASE_URL` unless
-you override `keyEnv` / `baseUrlEnv` in config.
+you override `keyEnv` / `baseUrlEnv` in config. A provider with no key is
+dropped entirely — it is skipped for routing, for catalog refresh, and in the
+model list.
 
 Lookup order, first non-empty value wins:
 
@@ -38,6 +38,20 @@ Lookup order, first non-empty value wins:
 
 Optional settings are listed in `.env.example`: listen address, upstream base
 URLs, and the OpenRouter app title/referer.
+
+`.env.example` writes every variable as a real `NAME=` line with an empty value
+rather than as a comment, because deploy platforms scan the repo for
+`NAME=value` pairs to prefill their environment-variable screen. A
+commented-out name is invisible to that scan and never reaches the container.
+
+## Container deploys
+
+`server.mjs` binds `FREE_ROUTER_HOST` and listens on
+`FREE_ROUTER_PORT`, falling back to `PORT` and then to `config.port`. A
+platform that assigns the port and injects it as `PORT` — SnapDeploy sets and
+locks it — therefore needs no configuration. The Dockerfile pins
+`FREE_ROUTER_HOST=0.0.0.0`, because a platform reverse proxy cannot reach
+`127.0.0.1`.
 
 ## Run
 
@@ -240,7 +254,9 @@ The registry in `providers.mjs` loads every block under `config.json`
 3. Optionally pin `name:model` in `discovery.evaluation.pinnedModels`.
 4. Set `<NAME>_API_KEY` in `.env` or `~/.hermes/.env`. Override the URL with
    `<NAME>_BASE_URL` if needed.
-5. Restart.
+5. Add `NAME=` to `.env.example` and a row to the README table. The smoke test
+   fails if a provider key is missing from either.
+6. Restart.
 
 ```json
 "newvendor": {
@@ -248,6 +264,18 @@ The registry in `providers.mjs` loads every block under `config.json`
   "freeModels": ["example-free"]
 }
 ```
+
+Two optional refinements:
+
+- `baseUrl` and `modelsUrl` expand `${ENV_VAR}` from the environment. Use this
+  when the account is part of the path rather than a header, as with Cloudflare
+  Workers AI: `.../accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1`. An unset name
+  expands to empty instead of throwing, so an unconfigured provider fails its
+  first request rather than blocking startup.
+- `"probeFreeTier": true` asks the provider whether it will serve each catalog
+  model for free and remembers the answer. It spends one request per candidate,
+  so it is only sound on a key with no billing attached. Leave it off for
+  providers that bill per token beyond an allowance.
 
 Optional fields: `keyEnv`, `baseUrlEnv`, `headers`, `chatPath`, `modelsPath`,
 `discover: false` to keep a priced catalog provider out of discovery, and

@@ -63,6 +63,279 @@
         "hy3",
         "mimo-v2.5"
       ]
+    },
+
+    "openai": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.openai.com/v1",
+      "keyEnv": "OPENAI_API_KEY",
+      "freeModels": []
+    },
+    "groq": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "keyEnv": "GROQ_API_KEY",
+      "freeModels": [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-4-scout-17b-16e-instruct",
+        "gpt-oss-120b",
+        "qwen3-32b"
+      ]
+    },
+    "cerebras": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "keyEnv": "CEREBRAS_API_KEY",
+      "freeModels": [
+        "llama-3.3-70b",
+        "qwen-3-235b-a22b-instruct-2507",
+        "gpt-oss-120b"
+      ]
+    },
+    "mistral": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.mistral.ai/v1",
+      "keyEnv": "MISTRAL_API_KEY",
+      "freeModels": [
+        "mistral-small-latest",
+        "mistral-medium-latest",
+        "devstral-small-latest",
+        "codestral-latest",
+        "ministral-3b-latest"
+      ]
+    },
+    "github": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://models.github.ai/inference",
+      "keyEnv": "GITHUB_API_KEY",
+      "freeModels": [
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-oss-120b",
+        "Meta-Llama-3.1-70B-Instruct",
+        "Phi-4"
+      ]
+    },
+    "nvidia": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://integrate.api.nvidia.com/v1",
+      "keyEnv": "NVIDIA_API_KEY",
+      "freeModels": [
+        "meta/llama-3.3-70b-instruct",
+        "deepseek-ai/deepseek-v3.2",
+        "nvidia/nemotron-3-super-120b-a12b",
+        "moonshotai/kimi-k2.5"
+      ]
+    },
+    "huggingface": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://router.huggingface.co/v1",
+      "keyEnv": "HUGGINGFACE_API_KEY",
+      "freeModels": [
+        "openai/gpt-oss-120b",
+        "meta-llama/Llama-3.3-70B-Instruct"
+      ]
+    },
+    "zhipu": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "keyEnv": "ZHIPU_API_KEY",
+      "freeModels": [
+        "glm-4.7-flash",
+        "glm-4.5-flash",
+        "glm-4.6v-flash"
+      ]
+    },
+    "moonshot": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.moonshot.ai/v1",
+      "keyEnv": "MOONSHOT_API_KEY",
+      "freeModels": [
+        "kimi-k2.5"
+      ]
+    },
+    "deepseek": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.deepseek.com/v1",
+      "keyEnv": "DEEPSEEK_API_KEY",
+      "freeModels": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ]
+    },
+    "sambanova": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://api.sambanova.ai/v1",
+      "keyEnv": "SAMBANOVA_API_KEY",
+      "freeModels": [
+        "Meta-Llama-3.3-70B-Instruct",
+        "Qwen3-32B"
+      ]
+    },
+    "xai": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.x.ai/v1",
+      "keyEnv": "XAI_API_KEY",
+      "freeModels": [
+        "grok-code-fast-1"
+      ]
+    },
+    "ollama": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://ollama.com/v1",
+      "keyEnv": "OLLAMA_API_KEY",
+      "freeModels": [
+        "gpt-oss:120b-cloud",
+        "qwen3:32b",
+        "nemotron-3-super:120b-cloud"
+      ]
+    },
+    "ovhcloud": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+      "keyEnv": "OVHCLOUD_API_KEY",
+      "freeModels": [
+        "Meta-Llama-3_3-70B-Instruct",
+        "Qwen3-30B-A3B-Instruct-2507"
+      ]
+    },
+    "scaleway": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.scaleway.ai/v1",
+      "keyEnv": "SCALEWAY_API_KEY",
+      "freeModels": [
+        "gpt-oss-120b",
+        "devstral-2-123b"
+      ]
+    },
+    "ai21": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.ai21.com/studio/v1",
+      "keyEnv": "AI21_API_KEY",
+      "freeModels": [
+        "jamba-large",
+        "jamba-mini"
+      ]
+    },
+    "chutes": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://api.chutes.ai/v1",
+      "keyEnv": "CHUTES_API_KEY",
+      "freeModels": [
+        "DeepSeek-R1",
+        "Qwen3-235B-A22B"
+      ]
+    },
+    "qwen": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "keyEnv": "QWEN_API_KEY",
+      "freeModels": [
+        "qwen3-coder-flash",
+        "qwen-flash"
+      ]
+    },
+    "nscale": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://inference.api.nscale.com/v1",
+      "keyEnv": "NSCALE_API_KEY",
+      "freeModels": [
+        "Qwen3-Next-80B-A3B-Instruct",
+        "GLM-4.5-Air"
+      ]
+    },
+    "nebius": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.studio.nebius.com/v1",
+      "keyEnv": "NEBIUS_API_KEY",
+      "freeModels": [
+        "meta-llama/Meta-Llama-3.1-8B-Instruct"
+      ]
+    },
+    "fireworks": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.fireworks.ai/inference/v1",
+      "keyEnv": "FIREWORKS_API_KEY",
+      "freeModels": [
+        "accounts/fireworks/models/gpt-oss-120b"
+      ]
+    },
+    "opencode": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "keyEnv": "OPENCODE_API_KEY",
+      "freeModels": [
+        "mimo-v2.5-free",
+        "big-pickle"
+      ]
+    },
+    "kilo": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "keyEnv": "KILO_API_KEY",
+      "freeModels": [
+        "x-ai/grok-code-fast-1:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "minimax/minimax-m2.5:free"
+      ]
+    },
+    "cloudflare": {
+      "catalog": true,
+      "pricing": false,
+      "baseUrl": "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+      "keyEnv": "CLOUDFLARE_API_KEY",
+      "freeModels": [
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "@cf/openai/gpt-oss-120b",
+        "@cf/google/gemma-4-26b-a4b-it"
+      ]
+    },
+    "deepinfra": {
+      "catalog": true,
+      "pricing": false,
+      "probeFreeTier": true,
+      "baseUrl": "https://api.deepinfra.com/v1/openai",
+      "keyEnv": "DEEPINFRA_API_KEY",
+      "freeModels": [
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "Qwen/Qwen3-32B"
+      ]
     }
   },
   "discovery": {
@@ -177,7 +450,104 @@
       "nvidia/nemotron-3-super-120b-a12b:free",
       "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
       "dots-studio/dots-3-note-preview:free",
-      "liquid/lfm-2.5-2.6b:free"
+      "liquid/lfm-2.5-2.6b:free",
+
+      {
+        "provider": "groq",
+        "model": "llama-3.3-70b-versatile"
+      },
+      {
+        "provider": "cerebras",
+        "model": "llama-3.3-70b"
+      },
+      {
+        "provider": "zhipu",
+        "model": "glm-4.7-flash"
+      },
+      {
+        "provider": "github",
+        "model": "gpt-oss-120b"
+      },
+      {
+        "provider": "nvidia",
+        "model": "deepseek-ai/deepseek-v3.2"
+      },
+      {
+        "provider": "mistral",
+        "model": "mistral-small-latest"
+      },
+      {
+        "provider": "deepseek",
+        "model": "deepseek-chat"
+      },
+      {
+        "provider": "ollama",
+        "model": "gpt-oss:120b-cloud"
+      },
+      {
+        "provider": "sambanova",
+        "model": "Meta-Llama-3.3-70B-Instruct"
+      },
+      {
+        "provider": "ovhcloud",
+        "model": "Meta-Llama-3_3-70B-Instruct"
+      },
+      {
+        "provider": "opencode",
+        "model": "mimo-v2.5-free"
+      },
+      {
+        "provider": "kilo",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free"
+      },
+      {
+        "provider": "cloudflare",
+        "model": "@cf/openai/gpt-oss-120b"
+      },
+      {
+        "provider": "scaleway",
+        "model": "gpt-oss-120b"
+      },
+      {
+        "provider": "chutes",
+        "model": "DeepSeek-R1"
+      },
+      {
+        "provider": "qwen",
+        "model": "qwen3-coder-flash"
+      },
+      {
+        "provider": "moonshot",
+        "model": "kimi-k2.5"
+      },
+      {
+        "provider": "deepinfra",
+        "model": "meta-llama/Llama-3.3-70B-Instruct"
+      },
+      {
+        "provider": "huggingface",
+        "model": "openai/gpt-oss-120b"
+      },
+      {
+        "provider": "xai",
+        "model": "grok-code-fast-1"
+      },
+      {
+        "provider": "nscale",
+        "model": "Qwen3-Next-80B-A3B-Instruct"
+      },
+      {
+        "provider": "fireworks",
+        "model": "accounts/fireworks/models/gpt-oss-120b"
+      },
+      {
+        "provider": "ai21",
+        "model": "jamba-large"
+      },
+      {
+        "provider": "nebius",
+        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct"
+      }
     ]
   }
 }

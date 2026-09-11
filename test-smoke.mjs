@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from './providers.mjs';
+import { createProviderRegistry, isChatModel, normalizeCatalogPayload, normalizeModelSlug, supportsRequest } from './providers.mjs';
 import { msUntilQuotaReset, parseQuotaFailure, permanentRejection } from './quota.mjs';
 import {
   SKIP_THOUGHT_SIGNATURE,
@@ -130,6 +130,364 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
     'gemini-omni-flash-preview',
   ]) {
     assert.equal(excluded(id), false, `should stay a candidate: ${id}`);
+  }
+}
+
+// --- What a deploy platform detects, and config integrity -------------------
+// SnapDeploy scans the repo and lists the variables it finds in `Dockerfile`,
+// `.env.example`, and framework config. A scanner reads `NAME=value` pairs, so
+// a commented-out name is invisible and the key never reaches the container.
+{
+  const repoRoot = path.dirname(fileURLToPath(import.meta.url));
+  const shipped = JSON.parse(fs.readFileSync(path.join(repoRoot, 'config.json'), 'utf8'));
+  const envExample = fs.readFileSync(path.join(repoRoot, '.env.example'), 'utf8');
+
+  const detected = new Set(
+    envExample
+      .split(/\r?\n/)
+      .map((line) => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/))
+      .filter(Boolean)
+      .map((match) => match[1]),
+  );
+  // A real value committed here is a leaked secret.
+  const withValues = envExample.split(/\r?\n/).filter((line) => /^[A-Za-z_][A-Za-z0-9_]*=.+/.test(line));
+  assert.deepEqual(withValues, [], '.env.example must not carry a real value');
+
+  for (const [name, provider] of Object.entries(shipped.providers)) {
+    const keyEnv = provider.keyEnv || `${name.replace(/-/g, '_').toUpperCase()}_API_KEY`;
+    assert.ok(detected.has(keyEnv), `${keyEnv} is not detectable in .env.example`);
+  }
+  // The account id is interpolated into Cloudflare's base URL rather than sent
+  // as a header, so it has to be discoverable too.
+  assert.ok(detected.has('CLOUDFLARE_ACCOUNT_ID'), 'CLOUDFLARE_ACCOUNT_ID not in .env.example');
+
+  // The provider table in the README is the only place a reader learns which
+  // key to set, so it has to cover every provider in the config.
+  const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+  const documented = new Set(
+    [...readme.matchAll(/`([A-Z0-9_]+_API_KEY)`/g)].map((match) => match[1]),
+  );
+  for (const [name, provider] of Object.entries(shipped.providers)) {
+    const keyEnv = provider.keyEnv || `${name.replace(/-/g, '_').toUpperCase()}_API_KEY`;
+    assert.ok(documented.has(keyEnv), `${keyEnv} is undocumented in README.md`);
+  }
+
+  // A hand-edited route can name a provider that does not exist, which leaves
+  // a dead entry in the ranking instead of an error.
+  const route = shipped.routes['free-best'];
+  assert.ok(route.length >= 40, `expected a populated route, got ${route.length}`);
+  for (const entry of route) {
+    const provider = typeof entry === 'string' ? shipped.defaultProvider : entry.provider;
+    assert.ok(shipped.providers[provider], `route entry names unknown provider "${provider}"`);
+    assert.ok(
+      typeof entry === 'string' || entry.model,
+      `route entry for ${provider} is missing a model`,
+    );
+  }
+}
+
+// --- Base URL environment interpolation ------------------------------------
+// Cloudflare Workers AI scopes chat to /accounts/<account_id>/ai/v1, so the
+// account id belongs in the URL. It comes from the environment to keep it out
+// of the committed config.
+{
+  const template = {
+    providers: {
+      scoped: {
+        baseUrl: 'https://example.test/accounts/${TEST_ACCOUNT_ID}/ai/v1',
+        freeModels: ['m'],
+      },
+    },
+  };
+
+  delete process.env.TEST_ACCOUNT_ID;
+  const unset = createProviderRegistry(template, { host: '127.0.0.1', port: 1 });
+  // Unset expands to empty rather than throwing, so an unconfigured provider
+  // fails its first request instead of blocking startup.
+  assert.equal(unset.get('scoped').baseUrl, 'https://example.test/accounts//ai/v1');
+
+  process.env.TEST_ACCOUNT_ID = 'acct-1';
+  const set = createProviderRegistry(template, { host: '127.0.0.1', port: 1 });
+  assert.equal(set.get('scoped').baseUrl, 'https://example.test/accounts/acct-1/ai/v1');
+  assert.equal(
+    set.chatUrl('scoped'),
+    'https://example.test/accounts/acct-1/ai/v1/chat/completions',
+  );
+  delete process.env.TEST_ACCOUNT_ID;
+}
+
+// --- A keyless provider must not spend a catalog request --------------------
+// The config lists many providers and most installs configure a few of them.
+{
+  let hits = 0;
+  const catalogProbe = http.createServer((request, response) => {
+    hits += 1;
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ data: [{ id: 'm', object: 'model' }] }));
+  });
+  await listen(catalogProbe);
+  const catalogConfig = {
+    providers: {
+      keyless: {
+        catalog: true,
+        baseUrl: `http://127.0.0.1:${catalogProbe.address().port}/v1`,
+        keyEnv: 'KEYLESS_API_KEY',
+        freeModels: ['m'],
+      },
+    },
+  };
+  try {
+    delete process.env.KEYLESS_API_KEY;
+    const withoutKey = createProviderRegistry(catalogConfig, { host: '127.0.0.1', port: 1 });
+    await withoutKey.refreshCatalogs(true, 0, () => {});
+    assert.equal(hits, 0, 'a provider with no key must not fetch a catalog');
+
+    process.env.KEYLESS_API_KEY = 'k';
+    const withKey = createProviderRegistry(catalogConfig, { host: '127.0.0.1', port: 1 });
+    await withKey.refreshCatalogs(true, 0, () => {});
+    assert.equal(hits, 1, 'a configured provider should still fetch its catalog');
+    assert.equal(withKey.get('keyless').catalog.size, 1);
+    delete process.env.KEYLESS_API_KEY;
+  } finally {
+    await close(catalogProbe);
+  }
+}
+
+// --- Catalog refresh is concurrent but bounded -----------------------------
+// handleChat awaits this, so a serial loop over every configured provider put
+// the first request behind all of them at once.
+{
+  let inFlight = 0;
+  let peak = 0;
+  let served = 0;
+  const slowCatalog = http.createServer((request, response) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    setTimeout(() => {
+      inFlight -= 1;
+      served += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'm', object: 'model' }] }));
+    }, 250);
+  });
+  await listen(slowCatalog);
+  const slowPort = slowCatalog.address().port;
+  const many = { providers: {} };
+  for (let index = 0; index < 12; index += 1) {
+    const name = `slow${index}`;
+    many.providers[name] = {
+      catalog: true,
+      baseUrl: `http://127.0.0.1:${slowPort}/v${index}`,
+      keyEnv: `SLOW${index}_API_KEY`,
+      freeModels: ['m'],
+    };
+    process.env[`SLOW${index}_API_KEY`] = 'k';
+  }
+  try {
+    const started = Date.now();
+    const manyRegistry = createProviderRegistry(many, { host: '127.0.0.1', port: 1 });
+    await manyRegistry.refreshCatalogs(true, 0, () => {});
+    const elapsed = Date.now() - started;
+
+    assert.equal(served, 12, 'every provider catalog should still be fetched');
+    assert.equal(
+      [...manyRegistry.providers.values()].filter((provider) => provider.catalog.size === 1)
+        .length,
+      12,
+      'every catalog should be populated',
+    );
+    assert.ok(peak > 1, `refresh should overlap, peak was ${peak}`);
+    assert.ok(peak <= 6, `refresh should stay bounded, peak was ${peak}`);
+    // 12 providers at 250ms is 3s serial and about 500ms at concurrency 6.
+    assert.ok(elapsed < 2000, `refresh took ${elapsed}ms; serial would be ~3000ms`);
+  } finally {
+    for (let index = 0; index < 12; index += 1) delete process.env[`SLOW${index}_API_KEY`];
+    await close(slowCatalog);
+  }
+}
+
+// Shared by the spawned-server tests below. Declared here rather than reusing
+// the module's HERE, which is a const further down and still in its TDZ.
+const serverEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'server.mjs');
+
+// --- The platform-assigned PORT is honoured --------------------------------
+// SnapDeploy assigns the port, injects it as PORT, and locks it.
+{
+  const portProbe = http.createServer();
+  await listen(portProbe);
+  const assignedPort = portProbe.address().port;
+  await close(portProbe);
+
+  const portDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-router-port-'));
+  const portConfig = path.join(portDir, 'config.json');
+  fs.writeFileSync(
+    portConfig,
+    JSON.stringify({
+      host: '127.0.0.1',
+      // Deliberately not the assigned port: PORT has to win.
+      port: 1,
+      ui: { enabled: false },
+      discovery: { enabled: false },
+      providers: {
+        openrouter: {
+          catalog: true,
+          pricing: true,
+          baseUrl: 'http://127.0.0.1:1/api/v1',
+          keyEnv: 'OPENROUTER_API_KEY',
+        },
+      },
+    }),
+  );
+
+  const portChild = spawn(process.execPath, [serverEntry], {
+    env: {
+      ...process.env,
+      FREE_ROUTER_CONFIG: portConfig,
+      FREE_ROUTER_PORT: '',
+      PORT: String(assignedPort),
+      OPENROUTER_API_KEY: 'test-key',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // The exit listener has to be attached before anything awaits: a server that
+  // fails to bind exits immediately, and listening afterwards never fires,
+  // which would turn a real failure into an unsettled await.
+  let exitInfo = null;
+  let portChildOutput = '';
+  portChild.stdout.on('data', (chunk) => {
+    portChildOutput += chunk;
+  });
+  portChild.stderr.on('data', (chunk) => {
+    portChildOutput += chunk;
+  });
+  const portChildExited = new Promise((resolve) => {
+    portChild.once('exit', (code, signal) => {
+      exitInfo = { code, signal };
+      resolve();
+    });
+  });
+
+  try {
+    let answered = false;
+    for (let attempt = 0; attempt < 80 && !exitInfo; attempt += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${assignedPort}/health`);
+        if (response.ok) {
+          answered = true;
+          break;
+        }
+      } catch {
+        // Not listening yet.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(
+      answered,
+      exitInfo
+        ? `server exited instead of listening on PORT ${assignedPort} ` +
+            `(code ${exitInfo.code}, signal ${exitInfo.signal}): ${portChildOutput.slice(-400)}`
+        : `server did not answer on the platform-assigned PORT ${assignedPort}`,
+    );
+  } finally {
+    if (!exitInfo) portChild.kill('SIGKILL');
+    await portChildExited;
+    fs.rmSync(portDir, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+// --- FREE_ROUTER_API_KEY guards the API surface ----------------------------
+// A container bound to 0.0.0.0 otherwise publishes the provider layout on
+// /health and spends the operator's quota through /v1/chat/completions.
+{
+  const authProbe = http.createServer();
+  await listen(authProbe);
+  const authPort = authProbe.address().port;
+  await close(authProbe);
+
+  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-router-auth-'));
+  const authConfig = path.join(authDir, 'config.json');
+  fs.writeFileSync(
+    authConfig,
+    JSON.stringify({
+      host: '127.0.0.1',
+      port: authPort,
+      ui: { enabled: true },
+      discovery: { enabled: false },
+      providers: {
+        openrouter: {
+          catalog: true,
+          pricing: true,
+          baseUrl: 'http://127.0.0.1:1/api/v1',
+          keyEnv: 'OPENROUTER_API_KEY',
+        },
+      },
+    }),
+  );
+
+  const authChild = spawn(process.execPath, [serverEntry], {
+    env: {
+      ...process.env,
+      FREE_ROUTER_CONFIG: authConfig,
+      PORT: String(authPort),
+      FREE_ROUTER_API_KEY: 'test-shared-secret',
+      OPENROUTER_API_KEY: 'test-key',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let authExitInfo = null;
+  const authExited = new Promise((resolve) => {
+    authChild.once('exit', (code, signal) => {
+      authExitInfo = { code, signal };
+      resolve();
+    });
+  });
+
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 80 && !authExitInfo; attempt += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${authPort}/health`, {
+          headers: { Authorization: 'Bearer test-shared-secret' },
+        });
+        if (response.ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        // Not listening yet.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(ready, 'server did not come up for the authentication test');
+
+    const statusOf = async (target, token) => {
+      const response = await fetch(`http://127.0.0.1:${authPort}${target}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      return response.status;
+    };
+
+    assert.equal(await statusOf('/health'), 401, '/health must require the token');
+    assert.equal(await statusOf('/health', 'wrong'), 401, 'a wrong token must be rejected');
+    assert.equal(await statusOf('/health', 'test-shared-secret'), 200);
+    assert.equal(await statusOf('/v1/models'), 401, '/v1/models must require the token');
+    assert.equal(await statusOf('/v1/models', 'test-shared-secret'), 200);
+    // The dashboard stays reachable for an authenticated caller, which is what
+    // makes a deployed instance manageable from outside loopback.
+    assert.equal(await statusOf('/', 'test-shared-secret'), 200);
+
+    const chat = await fetch(`http://127.0.0.1:${authPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'free-best', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(chat.status, 401, '/v1/chat/completions must require the token');
+  } finally {
+    if (!authExitInfo) authChild.kill('SIGKILL');
+    await authExited;
+    fs.rmSync(authDir, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 
