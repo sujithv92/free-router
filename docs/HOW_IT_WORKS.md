@@ -39,10 +39,15 @@ Lookup order, first non-empty value wins:
 Optional settings are listed in `.env.example`: listen address, upstream base
 URLs, and the OpenRouter app title/referer.
 
-`.env.example` writes every variable as a real `NAME=` line with an empty value
-rather than as a comment, because deploy platforms scan the repo for
-`NAME=value` pairs to prefill their environment-variable screen. A
-commented-out name is invisible to that scan and never reaches the container.
+`.env.example` writes only the variables a deployment genuinely needs as real
+`NAME=` lines, and keeps every optional one commented out. That split exists
+because deploy platforms scan the repo for `NAME=value` pairs to prefill their
+environment-variable screen and mark everything they find **Required**: a
+commented-out name is invisible to the scan, so it stays documentation instead
+of becoming a field you must fill before the platform will build. Nothing is
+lost by commenting a key out: you type the name in on the deploy screen or in
+the platform's settings, and a variable added there is injected exactly like a
+detected one.
 
 ## Container deploys
 
@@ -132,9 +137,9 @@ Set `enabled: false` to remove `/` and `/api/*` entirely.
 
 ### Why this needs care
 
-The router does not authenticate callers, and a page open in your browser can
-send requests to localhost. Since `start.sh` sources the env file with
-`set -a`, being able to write an arbitrary variable there would mean code
+The router takes no caller credential on loopback, and a page open in your
+browser can send requests to localhost. Since `start.sh` sources the env file
+with `set -a`, being able to write an arbitrary variable there would mean code
 execution on the next start. The write path is therefore constrained:
 
 - Keys are addressed **by provider name**, never by raw variable name. The
@@ -147,18 +152,29 @@ execution on the next start. The write path is therefore constrained:
 - `/` and `/api/*` require the peer to be on loopback, the `Host` header to be
   a loopback name (blocking DNS rebinding), and the request not to be
   cross-site per `Origin` / `Sec-Fetch-Site` (blocking CSRF). A plain `curl`
-  call sends neither header and still works.
+  call sends neither header and still works. A request that carries a valid
+  `Authorization: Bearer $FREE_ROUTER_API_KEY` passes instead of these, which is
+  the only way to reach the interface once the gateway is deployed off
+  loopback.
 - Keys are returned masked, never in full.
 - The secret redactor is rebuilt after a key change, so a key added through the
   UI is still stripped from upstream payloads.
 
-The `/v1/*` endpoints are deliberately left unguarded so existing clients keep
-working unchanged.
+`/v1/*` and `/health` are unguarded only while `FREE_ROUTER_API_KEY` is unset —
+fine on `127.0.0.1`, where the loopback is the access control. Set the token and
+both require it, because a container platform puts the same port on the public
+internet. The value is not issued by anyone; you generate it
+(`openssl rand -hex 32`) and callers send it as their API key. It is read once
+at startup. `.env` is dockerignored, so on a deployed instance the file the UI
+writes lives only in that container's writable layer and is gone after the next
+build — keep durable values in the platform's own environment variables instead.
 
 ## Use with any OpenAI-compatible client
 
-The local server does not authenticate callers. Keep it bound to localhost.
-Upstream provider keys stay on the gateway.
+On loopback the server takes no caller credential — the loopback is the access
+control — so `api_key` can be any string, and upstream provider keys stay on the
+gateway. Once you deploy it, set `FREE_ROUTER_API_KEY` and hand that value to
+clients as their API key instead; see the interface guard above.
 
 **curl**
 
@@ -254,8 +270,11 @@ The registry in `providers.mjs` loads every block under `config.json`
 3. Optionally pin `name:model` in `discovery.evaluation.pinnedModels`.
 4. Set `<NAME>_API_KEY` in `.env` or `~/.hermes/.env`. Override the URL with
    `<NAME>_BASE_URL` if needed.
-5. Add `NAME=` to `.env.example` and a row to the README table. The smoke test
-   fails if a provider key is missing from either.
+5. Add a commented `# NAME=` line to `.env.example`, with the signup URL above
+   it, and a row to the README table. The smoke test fails if a provider key is
+   missing from either. Keep the `.env.example` line commented: an uncommented
+   `NAME=` is read by deploy platforms as a **Required** variable, and a
+   provider you have no key for is meant to be optional.
 6. Restart.
 
 ```json
