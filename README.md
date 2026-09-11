@@ -88,11 +88,38 @@ the dashboard choose **Deploy from GitHub** and pick the repo.
    as a real `NAME=` line rather than a comment.
 3. Fill in the keys you have, leave the rest empty, and deploy. Names ending in
    `_KEY` or `_TOKEN` get a Secret badge and are masked.
-4. `PORT` is assigned and locked by SnapDeploy; `server.mjs` falls back to it,
+4. **Set `FREE_ROUTER_API_KEY`.** See below — without it the deployment is open.
+5. `PORT` is assigned and locked by SnapDeploy; `server.mjs` falls back to it,
    and the image binds `0.0.0.0` so the platform proxy can reach it.
 
 Add or rotate a key later under **Container Settings → Environment Variables**;
 SnapDeploy rolls the container so the new value takes effect.
+
+## Authentication
+
+Set `FREE_ROUTER_API_KEY` before exposing the router to anything but loopback.
+It is a shared secret that callers send as `Authorization: Bearer <token>`.
+
+Without it, `/v1/chat/completions` spends your upstream quota for anyone who
+can reach the port and `/health` publishes every base URL and free-model list.
+That is invisible locally, because `127.0.0.1` means only you — and it stops
+being true the moment a container platform routes public traffic to you.
+
+Setting it does two things: it makes `/v1/*` and `/health` require the token,
+and it lets an authenticated caller reach the web interface from off loopback,
+which is otherwise blocked by the loopback guard. Leaving it unset keeps the
+original loopback-only behaviour for local runs.
+
+```bash
+curl https://your-app.containers.snapdeploy.app/v1/chat/completions \
+  -H "Authorization: Bearer $FREE_ROUTER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"free-best","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Note that any browser page you visit can POST to `127.0.0.1:8787` — the
+`text/plain` content type avoids a CORS preflight and the body is still parsed
+as JSON. Setting a token closes that too.
 
 
 ```bash

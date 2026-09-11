@@ -381,26 +381,35 @@ export function createProviderRegistry(config, { host, port }) {
     }
   }
 
-  async function refreshCatalogs(force, catalogRefreshMs, log) {
-    for (const provider of providers.values()) {
-      if (!provider.usesCatalog) continue;
-      try {
-        const result = await refreshProviderCatalog(provider, force, catalogRefreshMs);
-        if (result) {
-          const detail =
-            result.freeCount === null
-              ? `${result.chatCount} chat-capable, no prices published`
-              : `${result.freeCount} zero-cost`;
-          log(`catalog refreshed (${result.name}): ${result.size} models, ${detail}`);
+  // Refreshing one provider at a time made the first request after startup
+  // wait for every catalog in turn: 25 providers at 700ms each measured 17.6s,
+  // and handleChat awaits this. Bounded rather than unbounded so a cold start
+  // does not fire every listing at once and trip provider rate limits.
+  async function refreshCatalogs(force, catalogRefreshMs, log, concurrency = 6) {
+    const queue = [...providers.values()].filter((provider) => provider.usesCatalog);
+    const worker = async () => {
+      // shift() is synchronous, so workers cannot take the same provider.
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        try {
+          const result = await refreshProviderCatalog(next, force, catalogRefreshMs);
+          if (result) {
+            const detail =
+              result.freeCount === null
+                ? `${result.chatCount} chat-capable, no prices published`
+                : `${result.freeCount} zero-cost`;
+            log(`catalog refreshed (${result.name}): ${result.size} models, ${detail}`);
+          }
+        } catch (error) {
+          log(
+            `catalog refresh failed for ${next.name}; retaining previous catalog: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
-      } catch (error) {
-        log(
-          `catalog refresh failed for ${provider.name}; retaining previous catalog: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
       }
-    }
+    };
+    const workers = Math.min(concurrency, queue.length);
+    await Promise.all(Array.from({ length: workers }, worker));
   }
 
   function listListedModels() {

@@ -253,6 +253,63 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
   }
 }
 
+// --- Catalog refresh is concurrent but bounded -----------------------------
+// handleChat awaits this, so a serial loop over every configured provider put
+// the first request behind all of them at once.
+{
+  let inFlight = 0;
+  let peak = 0;
+  let served = 0;
+  const slowCatalog = http.createServer((request, response) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    setTimeout(() => {
+      inFlight -= 1;
+      served += 1;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'm', object: 'model' }] }));
+    }, 250);
+  });
+  await listen(slowCatalog);
+  const slowPort = slowCatalog.address().port;
+  const many = { providers: {} };
+  for (let index = 0; index < 12; index += 1) {
+    const name = `slow${index}`;
+    many.providers[name] = {
+      catalog: true,
+      baseUrl: `http://127.0.0.1:${slowPort}/v${index}`,
+      keyEnv: `SLOW${index}_API_KEY`,
+      freeModels: ['m'],
+    };
+    process.env[`SLOW${index}_API_KEY`] = 'k';
+  }
+  try {
+    const started = Date.now();
+    const manyRegistry = createProviderRegistry(many, { host: '127.0.0.1', port: 1 });
+    await manyRegistry.refreshCatalogs(true, 0, () => {});
+    const elapsed = Date.now() - started;
+
+    assert.equal(served, 12, 'every provider catalog should still be fetched');
+    assert.equal(
+      [...manyRegistry.providers.values()].filter((provider) => provider.catalog.size === 1)
+        .length,
+      12,
+      'every catalog should be populated',
+    );
+    assert.ok(peak > 1, `refresh should overlap, peak was ${peak}`);
+    assert.ok(peak <= 6, `refresh should stay bounded, peak was ${peak}`);
+    // 12 providers at 250ms is 3s serial and about 500ms at concurrency 6.
+    assert.ok(elapsed < 2000, `refresh took ${elapsed}ms; serial would be ~3000ms`);
+  } finally {
+    for (let index = 0; index < 12; index += 1) delete process.env[`SLOW${index}_API_KEY`];
+    await close(slowCatalog);
+  }
+}
+
+// Shared by the spawned-server tests below. Declared here rather than reusing
+// the module's HERE, which is a const further down and still in its TDZ.
+const serverEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'server.mjs');
+
 // --- The platform-assigned PORT is honoured --------------------------------
 // SnapDeploy assigns the port, injects it as PORT, and locks it.
 {
@@ -282,7 +339,6 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
     }),
   );
 
-  const serverEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'server.mjs');
   const portChild = spawn(process.execPath, [serverEntry], {
     env: {
       ...process.env,
@@ -337,6 +393,101 @@ assert.equal(normalizeCatalogPayload({ weird: true }).shape, 'unknown');
     if (!exitInfo) portChild.kill('SIGKILL');
     await portChildExited;
     fs.rmSync(portDir, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+// --- FREE_ROUTER_API_KEY guards the API surface ----------------------------
+// A container bound to 0.0.0.0 otherwise publishes the provider layout on
+// /health and spends the operator's quota through /v1/chat/completions.
+{
+  const authProbe = http.createServer();
+  await listen(authProbe);
+  const authPort = authProbe.address().port;
+  await close(authProbe);
+
+  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), 'free-router-auth-'));
+  const authConfig = path.join(authDir, 'config.json');
+  fs.writeFileSync(
+    authConfig,
+    JSON.stringify({
+      host: '127.0.0.1',
+      port: authPort,
+      ui: { enabled: true },
+      discovery: { enabled: false },
+      providers: {
+        openrouter: {
+          catalog: true,
+          pricing: true,
+          baseUrl: 'http://127.0.0.1:1/api/v1',
+          keyEnv: 'OPENROUTER_API_KEY',
+        },
+      },
+    }),
+  );
+
+  const authChild = spawn(process.execPath, [serverEntry], {
+    env: {
+      ...process.env,
+      FREE_ROUTER_CONFIG: authConfig,
+      PORT: String(authPort),
+      FREE_ROUTER_API_KEY: 'test-shared-secret',
+      OPENROUTER_API_KEY: 'test-key',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  let authExitInfo = null;
+  const authExited = new Promise((resolve) => {
+    authChild.once('exit', (code, signal) => {
+      authExitInfo = { code, signal };
+      resolve();
+    });
+  });
+
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 80 && !authExitInfo; attempt += 1) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${authPort}/health`, {
+          headers: { Authorization: 'Bearer test-shared-secret' },
+        });
+        if (response.ok) {
+          ready = true;
+          break;
+        }
+      } catch {
+        // Not listening yet.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(ready, 'server did not come up for the authentication test');
+
+    const statusOf = async (target, token) => {
+      const response = await fetch(`http://127.0.0.1:${authPort}${target}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      return response.status;
+    };
+
+    assert.equal(await statusOf('/health'), 401, '/health must require the token');
+    assert.equal(await statusOf('/health', 'wrong'), 401, 'a wrong token must be rejected');
+    assert.equal(await statusOf('/health', 'test-shared-secret'), 200);
+    assert.equal(await statusOf('/v1/models'), 401, '/v1/models must require the token');
+    assert.equal(await statusOf('/v1/models', 'test-shared-secret'), 200);
+    // The dashboard stays reachable for an authenticated caller, which is what
+    // makes a deployed instance manageable from outside loopback.
+    assert.equal(await statusOf('/', 'test-shared-secret'), 200);
+
+    const chat = await fetch(`http://127.0.0.1:${authPort}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'free-best', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(chat.status, 401, '/v1/chat/completions must require the token');
+  } finally {
+    if (!authExitInfo) authChild.kill('SIGKILL');
+    await authExited;
+    fs.rmSync(authDir, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 

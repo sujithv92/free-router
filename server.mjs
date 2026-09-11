@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +67,12 @@ const HOST = process.env.FREE_ROUTER_HOST || config.host || '127.0.0.1';
 // and locks it, so honouring PORT is what makes a zero-config image reachable;
 // FREE_ROUTER_PORT stays the explicit override for anyone who wants one.
 const PORT = Number(process.env.FREE_ROUTER_PORT || process.env.PORT || config.port || 8787);
+// /v1 and /health have no caller identity of their own, so a container bound
+// to 0.0.0.0 hands anyone who can reach the port your upstream quota. Setting
+// a shared secret makes them require it, and unlocks the web interface off
+// loopback so a deployed instance is still manageable. Leaving it unset keeps
+// the original loopback-only behaviour for local runs.
+const API_TOKEN = String(process.env.FREE_ROUTER_API_KEY || '');
 const ATTEMPT_TIMEOUT_MS = Number(
   process.env.FREE_ROUTER_ATTEMPT_TIMEOUT_MS || config.attemptTimeoutMs || 180000,
 );
@@ -1658,13 +1665,28 @@ function isLoopbackAddress(address) {
   return plain === '::1' || plain === '127.0.0.1' || plain.startsWith('127.');
 }
 
+// Constant-time so the token cannot be recovered one character at a time from
+// response timing. The length check is not a leak: timingSafeEqual requires
+// equal lengths and throws otherwise.
+function bearerMatches(req) {
+  if (!API_TOKEN) return false;
+  const header = String(req.headers.authorization || '');
+  if (!/^bearer\s+/i.test(header)) return false;
+  const presented = Buffer.from(header.replace(/^bearer\s+/i, '').trim());
+  const expected = Buffer.from(API_TOKEN);
+  return presented.length === expected.length && crypto.timingSafeEqual(presented, expected);
+}
+
 // The router has no caller authentication, so any page the user visits could
-// otherwise drive these endpoints. Three independent checks:
+// otherwise drive these endpoints. Four checks, strongest first:
+//   - a valid bearer token, which is the only one that works once the
+//     container sits behind a platform proxy that is not on loopback;
 //   - the peer must be on loopback, even if the listener was bound wider;
 //   - the Host header must be a loopback name, which blocks DNS rebinding;
 //   - the request must not be cross-site, which blocks browser-driven CSRF.
 // A plain curl call sends neither Origin nor Sec-Fetch-Site and is allowed.
 function uiGuardFailure(req) {
+  if (bearerMatches(req)) return '';
   if (!isLoopbackAddress(req.socket?.remoteAddress)) return 'requests must come from loopback';
 
   const host = String(req.headers.host || '');
@@ -1795,6 +1817,18 @@ async function handler(req, res) {
     }
   }
 
+  // With a secret configured, everything outside the guarded UI needs it.
+  // Otherwise /health publishes the whole provider layout and /v1/chat/
+  // completions spends the operator's upstream quota for whoever asked.
+  if (API_TOKEN && !isUiPath && !bearerMatches(req)) {
+    return sendJson(res, 401, {
+      error: {
+        message: 'Incorrect API key provided. Send it as "Authorization: Bearer <token>".',
+        type: 'invalid_api_key',
+      },
+    });
+  }
+
   if (req.method === 'GET' && url.pathname === '/') {
     const page = renderPage();
     res.writeHead(200, {
@@ -1920,6 +1954,16 @@ server.keepAliveTimeout = 5000;
 server.listen(PORT, HOST, async () => {
   log(`Free Router ${VERSION} listening on http://${HOST}:${PORT}/v1`);
   if (UI_ENABLED) log(`web interface on http://${HOST}:${PORT}/`);
+  // The one misconfiguration worth shouting about: a non-loopback bind with no
+  // secret means the endpoint spends the operator's quota for anyone.
+  if (!isLoopbackAddress(HOST) && !API_TOKEN) {
+    log(
+      `warning: bound to ${HOST} with no FREE_ROUTER_API_KEY; ` +
+        '/v1 and /health are reachable by anyone who can reach this host',
+    );
+  } else if (API_TOKEN) {
+    log('caller authentication enabled (FREE_ROUTER_API_KEY)');
+  }
   for (const provider of PROVIDERS.values()) {
     if (!provider.apiKey) log(`warning: ${provider.keyEnv} is missing`);
   }

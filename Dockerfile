@@ -18,8 +18,10 @@ ENV PORT=8787
 EXPOSE 8787
 
 # The image is stateless except for discovered-free-models.json, so the health
-# check only has to prove the process answers.
+# check only has to prove the process answers. It presents the caller token
+# from the environment: /health is authenticated once FREE_ROUTER_API_KEY is
+# set, and a 401 here would read as an unhealthy container.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.PORT||8787,t=process.env.FREE_ROUTER_API_KEY;fetch('http://127.0.0.1:'+p+'/health',{headers:t?{Authorization:'Bearer '+t}:{}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.mjs"]
